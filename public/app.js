@@ -10,8 +10,6 @@ const state = {
   templates: []
 };
 
-const TEMPLATE_STORAGE_KEY = "hilinkSmsTemplates";
-
 const titles = {
   inbox: "收件箱",
   sent: "已发送",
@@ -72,7 +70,7 @@ function updateShell() {
   $("#viewTitle").textContent = titles[state.box] || "短信";
   $("#viewMeta").textContent = state.loggedIn
     ? `${state.messages.length} / ${state.messagesTotal || 0}`
-    : "未登录";
+    : "正在连接设备";
   $$(".folder").forEach((button) => button.classList.toggle("active", button.dataset.box === state.box));
 }
 
@@ -111,25 +109,34 @@ function updateDeviceInfo(info = {}) {
 
 function defaultTemplates() {
   return [
-    { id: "default-later", title: "稍后回复", content: "我现在不方便，稍后回复你。" },
-    { id: "default-arrived", title: "已收到", content: "已收到，谢谢。" },
-    { id: "default-call", title: "请回电", content: "看到后请给我回个电话。" }
+    {
+      id: "notification",
+      title: "通知",
+      description: "发送通用通知短信",
+      content: "【通知】{{message}}",
+      variables: [{ name: "message", label: "通知内容", required: true }]
+    },
+    {
+      id: "verification-code",
+      title: "验证码",
+      description: "发送一次性验证码",
+      content: "您的验证码是 {{code}}，{{ttl}} 分钟内有效。",
+      variables: [
+        { name: "code", label: "验证码", required: true },
+        { name: "ttl", label: "有效期（分钟）", required: true, default: "5" }
+      ]
+    }
   ];
 }
 
-function loadTemplates() {
+async function loadTemplates() {
   try {
-    const raw = localStorage.getItem(TEMPLATE_STORAGE_KEY);
-    const saved = raw === null ? null : JSON.parse(raw);
-    state.templates = Array.isArray(saved) ? saved : defaultTemplates();
+    const data = await api("/api/templates");
+    state.templates = Array.isArray(data.templates) ? data.templates : defaultTemplates();
   } catch {
     state.templates = defaultTemplates();
   }
   renderTemplates();
-}
-
-function saveTemplates() {
-  localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify(state.templates));
 }
 
 function renderTemplates() {
@@ -146,55 +153,44 @@ function renderTemplates() {
     item.innerHTML = `
       <button class="template-use" type="button">
         <strong>${escapeHtml(template.title)}</strong>
-        <span>${escapeHtml(template.content)}</span>
-      </button>
-      <button class="template-delete" type="button" title="删除模板" aria-label="删除模板">
-        <span data-icon="close"></span>
+        <span>${escapeHtml(template.description || template.content)}</span>
       </button>
     `;
     item.querySelector(".template-use").addEventListener("click", () => applyTemplate(template));
-    item.querySelector(".template-delete").addEventListener("click", () => deleteTemplate(template.id));
     list.append(item);
   }
   installIcons();
 }
 
 function applyTemplate(template) {
-  $("#contentInput").value = template.content;
+  const values = {};
+  for (const variable of template.variables || []) {
+    const currentContent = $("#contentInput").value.trim();
+    const fallback = variable.default || (variable.name === "code" ? randomCode() : "");
+    const value = variable.name === "message" && currentContent
+      ? currentContent
+      : window.prompt(variable.label || variable.name, fallback);
+    if (value === null) return;
+    values[variable.name] = value;
+  }
+  $("#contentInput").value = renderTemplateContent(template.content, values);
   updateComposeMeta();
   $("#contentInput").focus();
 }
 
-function deleteTemplate(id) {
-  state.templates = state.templates.filter((template) => template.id !== id);
-  saveTemplates();
-  renderTemplates();
+function randomCode() {
+  return String(Math.floor(Math.random() * 1000000)).padStart(6, "0");
 }
 
-function saveCurrentTemplate() {
-  const content = $("#contentInput").value.trim();
-  if (!content) {
-    $("#composeError").textContent = "模板内容不能为空";
-    return;
-  }
-  const title = content.length > 14 ? `${content.slice(0, 14)}...` : content;
-  state.templates.unshift({
-    id: `tpl-${Date.now()}`,
-    title,
-    content
-  });
-  state.templates = state.templates.slice(0, 24);
-  saveTemplates();
-  renderTemplates();
-  $("#composeError").textContent = "";
-  toast("模板已保存");
+function renderTemplateContent(content, values = {}) {
+  return String(content || "").replace(/{{\s*([A-Za-z0-9_.-]+)\s*}}/g, (_, name) => values[name] ?? "");
 }
 
 function renderList() {
   const list = $("#messageList");
   list.innerHTML = "";
   if (!state.loggedIn) {
-    list.innerHTML = '<div class="empty-list"><span data-icon="message"></span><strong>等待登录</strong></div>';
+    list.innerHTML = '<div class="empty-list"><span data-icon="message"></span><strong>正在连接设备</strong></div>';
     installIcons();
     return;
   }
@@ -304,28 +300,22 @@ async function loadState() {
   const data = await api("/api/state");
   state.loggedIn = data.loggedIn;
   $("#routerLabel").textContent = new URL(data.router).host;
-  if (!state.loggedIn) {
-    $("#loginDialog").showModal();
-  } else {
-    await refreshAll();
-  }
   updateShell();
   renderList();
   renderDetail();
+  if (!data.credentialsConfigured) throw new Error("请先在 .env 中设置 HILINK_USERNAME 和 HILINK_PASSWORD");
+  await refreshAll();
 }
 
 async function loadCounts() {
-  if (!state.loggedIn) return;
   updateCounts(await api("/api/counts"));
 }
 
 async function loadDeviceInfo() {
-  if (!state.loggedIn) return;
   updateDeviceInfo(await api("/api/device-info"));
 }
 
 async function loadMessages() {
-  if (!state.loggedIn) return;
   const data = await api(`/api/messages?box=${encodeURIComponent(state.box)}&page=${state.page}&pageSize=${state.pageSize}`);
   state.messages = data.messages || [];
   state.messagesTotal = data.count || 0;
@@ -337,6 +327,10 @@ async function loadMessages() {
 
 async function refreshAll() {
   await Promise.all([loadCounts(), loadMessages(), loadDeviceInfo()]);
+  state.loggedIn = true;
+  updateShell();
+  renderList();
+  renderDetail();
 }
 
 async function markSelectedRead() {
@@ -406,39 +400,6 @@ function wireEvents() {
     await loadDeviceInfo().then(() => toast("设备信息已刷新")).catch((error) => toast(error.message));
   });
 
-  $("#logoutButton").addEventListener("click", async () => {
-    await api("/api/logout", { method: "POST", body: "{}" }).catch(() => null);
-    state.loggedIn = false;
-    state.messages = [];
-    state.selected = null;
-    updateDeviceInfo({});
-    updateCounts({});
-    updateShell();
-    renderList();
-    renderDetail();
-    $("#loginDialog").showModal();
-  });
-
-  $("#loginForm").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    $("#loginError").textContent = "";
-    const username = $("#usernameInput").value.trim();
-    const password = $("#passwordInput").value;
-    try {
-      const data = await api("/api/login", {
-        method: "POST",
-        body: JSON.stringify({ username, password })
-      });
-      state.loggedIn = data.loggedIn;
-      $("#passwordInput").value = "";
-      $("#loginDialog").close();
-      await refreshAll();
-      toast("已登录");
-    } catch (error) {
-      $("#loginError").textContent = error.message;
-    }
-  });
-
   $("#composeButton").addEventListener("click", () => openComposer());
 
   $("#closeCompose").addEventListener("click", () => $("#composeDialog").close());
@@ -448,7 +409,6 @@ function wireEvents() {
   });
 
   $("#phonesInput").addEventListener("input", updateComposeMeta);
-  $("#saveTemplateButton").addEventListener("click", saveCurrentTemplate);
 
   $("#composeForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -474,9 +434,11 @@ function wireEvents() {
 }
 
 installIcons();
-loadTemplates();
 wireEvents();
+loadTemplates();
 loadState().catch((error) => {
+  state.loggedIn = false;
+  updateShell();
+  renderList();
   toast(error.message);
-  $("#loginDialog").showModal();
 });

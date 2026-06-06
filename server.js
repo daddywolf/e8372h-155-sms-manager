@@ -2,10 +2,37 @@ const crypto = require("node:crypto");
 const http = require("node:http");
 const path = require("node:path");
 const fs = require("node:fs/promises");
+const fsSync = require("node:fs");
+
+function loadEnvFile(filePath) {
+  if (!fsSync.existsSync(filePath)) return;
+  const content = fsSync.readFileSync(filePath, "utf8");
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    let value = line.slice(eq + 1).trim();
+    if (
+      (value.startsWith("\"") && value.endsWith("\"")) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (process.env[key] === undefined) process.env[key] = value;
+  }
+}
+
+loadEnvFile(path.join(__dirname, ".env"));
+
+const { listTemplates, renderTemplate } = require("./templates");
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 8787);
 const ROUTER_BASE = process.env.HILINK_BASE || "http://192.168.7.1";
+const ROUTER_USERNAME = envValue(["HILINK_USERNAME", "HILINK_USER"], "admin");
+const ROUTER_PASSWORD = envValue(["HILINK_PASSWORD", "HILINK_PASS"]);
 const STATIC_ROOT = path.join(__dirname, "public");
 const DEBUG = process.env.DEBUG_HILINK === "1";
 
@@ -172,6 +199,14 @@ function parseFlatResponse(xml) {
 
 function firstValue(...values) {
   return values.find((value) => value !== undefined && value !== null && String(value).trim() !== "") || "";
+}
+
+function envValue(keys, fallback = "") {
+  for (const key of keys) {
+    const value = process.env[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") return value;
+  }
+  return fallback;
 }
 
 function parseNumber(value) {
@@ -355,7 +390,8 @@ class HiLinkClient {
   state() {
     return {
       loggedIn: this.loggedIn,
-      username: this.username,
+      authMode: "env",
+      credentialsConfigured: hasRouterCredentials(),
       router: this.baseUrl
     };
   }
@@ -493,6 +529,7 @@ class HiLinkClient {
 }
 
 const client = new HiLinkClient(ROUTER_BASE);
+let loginPromise = null;
 
 function sendJson(response, status, data) {
   response.writeHead(status, {
@@ -509,56 +546,90 @@ async function readJson(request) {
   return raw ? JSON.parse(raw) : {};
 }
 
-function requireLogin() {
-  if (!client.loggedIn) {
-    const error = new Error("请先登录设备");
-    error.status = 401;
+function hasRouterCredentials() {
+  return Boolean(ROUTER_USERNAME && ROUTER_PASSWORD);
+}
+
+async function ensureDeviceSession() {
+  if (client.loggedIn) return;
+  if (!hasRouterCredentials()) {
+    const error = new Error("请在 .env 中设置 HILINK_USERNAME 和 HILINK_PASSWORD");
+    error.status = 500;
+    throw error;
+  }
+  if (!loginPromise) {
+    loginPromise = client.login(ROUTER_USERNAME, ROUTER_PASSWORD)
+      .finally(() => {
+        loginPromise = null;
+      });
+  }
+  await loginPromise;
+}
+
+async function withDeviceSession(operation) {
+  await ensureDeviceSession();
+  try {
+    return await operation();
+  } catch (error) {
+    if (error.code === "100003" || error.code === "125002") {
+      client.loggedIn = false;
+      await ensureDeviceSession();
+      return operation();
+    }
     throw error;
   }
 }
 
 async function api(request, response, pathname, searchParams) {
   if (request.method === "GET" && pathname === "/api/state") return sendJson(response, 200, client.state());
-  if (request.method === "POST" && pathname === "/api/login") {
-    const body = await readJson(request);
-    if (!body.username || !body.password) throw new Error("请输入账号和密码");
-    return sendJson(response, 200, await client.login(body.username, body.password));
-  }
-  if (request.method === "POST" && pathname === "/api/logout") return sendJson(response, 200, await client.logout());
+  if (request.method === "GET" && pathname === "/api/templates") return sendJson(response, 200, { templates: listTemplates() });
   if (request.method === "GET" && pathname === "/api/counts") {
-    requireLogin();
-    return sendJson(response, 200, await client.counts());
+    return sendJson(response, 200, await withDeviceSession(() => client.counts()));
   }
   if (request.method === "GET" && pathname === "/api/device-info") {
-    requireLogin();
-    return sendJson(response, 200, await client.deviceInfo());
+    return sendJson(response, 200, await withDeviceSession(() => client.deviceInfo()));
   }
   if (request.method === "GET" && pathname === "/api/messages") {
-    requireLogin();
-    return sendJson(response, 200, await client.messages({
+    return sendJson(response, 200, await withDeviceSession(() => client.messages({
       box: searchParams.get("box") || "inbox",
       page: searchParams.get("page") || "1",
       pageSize: searchParams.get("pageSize") || "20"
-    }));
+    })));
   }
   if (request.method === "POST" && pathname === "/api/read") {
-    requireLogin();
     const body = await readJson(request);
-    return sendJson(response, 200, await client.markRead(body.indexes || [body.index].filter(Boolean)));
+    return sendJson(response, 200, await withDeviceSession(() => client.markRead(body.indexes || [body.index].filter(Boolean))));
   }
   if (request.method === "POST" && pathname === "/api/delete") {
-    requireLogin();
     const body = await readJson(request);
-    return sendJson(response, 200, await client.delete(body.indexes || [body.index].filter(Boolean)));
+    return sendJson(response, 200, await withDeviceSession(() => client.delete(body.indexes || [body.index].filter(Boolean))));
   }
   if (request.method === "POST" && pathname === "/api/send") {
-    requireLogin();
     const body = await readJson(request);
-    return sendJson(response, 200, await client.send(body));
+    return sendJson(response, 200, await withDeviceSession(() => client.send(body)));
+  }
+  if (request.method === "POST" && pathname === "/api/send-template") {
+    const body = await readJson(request);
+    const templateId = body.templateId || body.type;
+    if (!templateId) throw new Error("请选择短信模板");
+    const content = renderTemplate(templateId, body.variables || body.data || {});
+    return sendJson(response, 200, await withDeviceSession(() => client.send({ phones: body.phones, content })));
+  }
+  if (request.method === "POST" && pathname === "/api/send-notification") {
+    const body = await readJson(request);
+    const content = renderTemplate("notification", { message: body.message });
+    return sendJson(response, 200, await withDeviceSession(() => client.send({ phones: body.phones, content })));
+  }
+  if (request.method === "POST" && pathname === "/api/send-verification-code") {
+    const body = await readJson(request);
+    const content = renderTemplate("verification-code", {
+      code: body.code,
+      ttl: body.ttl || process.env.SMS_CODE_TTL || "5"
+    });
+    return sendJson(response, 200, await withDeviceSession(() => client.send({ phones: body.phones, content })));
   }
   if (request.method === "GET" && pathname === "/api/send-status") {
-    requireLogin();
-    return sendJson(response, 200, await client.sendStatus());
+    return sendJson(response, 200, await withDeviceSession(() => client.sendStatus()));
   }
   sendJson(response, 404, { error: "Not found" });
 }
