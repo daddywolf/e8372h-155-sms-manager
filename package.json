@@ -1,0 +1,12 @@
+{
+  "name": "hilink-sms-manager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local Huawei HiLink SMS manager",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

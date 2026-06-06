@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HiLink SMS</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">H</div>
+          <div>
+            <h1>HiLink SMS</h1>
+            <p id="routerLabel">192.168.7.1</p>
+          </div>
+        </div>
+
+        <nav class="folders" aria-label="短信箱">
+          <button class="folder active" data-box="inbox">
+            <span class="folder-icon" data-icon="inbox"></span>
+            <span>收件箱</span>
+            <strong id="badgeInbox">0</strong>
+          </button>
+          <button class="folder" data-box="sent">
+            <span class="folder-icon" data-icon="sent"></span>
+            <span>已发送</span>
+            <strong id="badgeSent">0</strong>
+          </button>
+          <button class="folder" data-box="drafts">
+            <span class="folder-icon" data-icon="draft"></span>
+            <span>草稿</span>
+            <strong id="badgeDrafts">0</strong>
+          </button>
+          <button class="folder" data-box="trash">
+            <span class="folder-icon" data-icon="trash"></span>
+            <span>回收站</span>
+            <strong id="badgeTrash">0</strong>
+          </button>
+        </nav>
+
+        <div class="side-bottom">
+          <section class="device-panel" aria-label="设备信息">
+            <div class="device-panel-head">
+              <span>设备信息</span>
+              <button class="mini-icon-button" id="deviceRefreshButton" title="刷新设备信息" aria-label="刷新设备信息">
+                <span data-icon="refresh"></span>
+              </button>
+            </div>
+            <dl class="device-facts">
+              <div>
+                <dt>号码</dt>
+                <dd id="devicePhone">-</dd>
+              </div>
+              <div>
+                <dt>运营商</dt>
+                <dd id="deviceOperator">-</dd>
+              </div>
+              <div>
+                <dt>信号</dt>
+                <dd id="deviceSignal">-</dd>
+              </div>
+              <div>
+                <dt>IP</dt>
+                <dd id="deviceIp">-</dd>
+              </div>
+              <div>
+                <dt>网络</dt>
+                <dd id="deviceNetwork">-</dd>
+              </div>
+              <div>
+                <dt>型号</dt>
+                <dd id="deviceModel">-</dd>
+              </div>
+            </dl>
+          </section>
+
+          <div class="usage">
+            <div>
+              <span>本机容量</span>
+              <strong id="localUsage">0 / 500</strong>
+            </div>
+            <div class="usage-bar"><span id="usageFill"></span></div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="toolbar">
+          <div>
+            <h2 id="viewTitle">收件箱</h2>
+            <p id="viewMeta">未登录</p>
+          </div>
+          <div class="toolbar-actions">
+            <button class="icon-button" id="refreshButton" title="刷新" aria-label="刷新">
+              <span data-icon="refresh"></span>
+            </button>
+            <button class="primary-button" id="composeButton">
+              <span data-icon="compose"></span>
+              <span>新短信</span>
+            </button>
+            <button class="ghost-button" id="logoutButton">退出</button>
+          </div>
+        </header>
+
+        <section class="content-grid">
+          <section class="message-list" id="messageList" aria-label="短信列表"></section>
+          <section class="message-detail" id="messageDetail">
+            <div class="empty-detail">
+              <span data-icon="message"></span>
+              <h3>选择一条短信</h3>
+              <p>暂无选择</p>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="loginDialog" class="dialog">
+      <form id="loginForm" class="dialog-panel">
+        <h2>登录 HiLink</h2>
+        <label>
+          <span>账号</span>
+          <input id="usernameInput" name="username" autocomplete="username" value="admin">
+        </label>
+        <label>
+          <span>密码</span>
+          <input id="passwordInput" name="password" type="password" autocomplete="current-password">
+        </label>
+        <p class="form-error" id="loginError"></p>
+        <button class="primary-button full" type="submit">登录</button>
+      </form>
+    </dialog>
+
+    <dialog id="composeDialog" class="dialog">
+      <form id="composeForm" class="dialog-panel compose-panel">
+        <div class="dialog-head">
+          <h2 id="composeTitle">新短信</h2>
+          <button class="icon-button" id="closeCompose" type="button" title="关闭" aria-label="关闭">
+            <span data-icon="close"></span>
+          </button>
+        </div>
+        <div class="compose-body">
+          <section class="compose-fields">
+            <label>
+              <span>收件人</span>
+              <textarea id="phonesInput" name="phones" rows="4"></textarea>
+            </label>
+            <label class="content-field">
+              <span>内容</span>
+              <textarea id="contentInput" name="content" rows="8" maxlength="1000"></textarea>
+            </label>
+          </section>
+          <section class="template-panel" aria-label="短信模板">
+            <div class="template-head">
+              <span>模板</span>
+              <button class="ghost-button compact-button" id="saveTemplateButton" type="button">保存</button>
+            </div>
+            <div class="template-list" id="templateList"></div>
+          </section>
+        </div>
+        <div class="compose-footer">
+          <span id="composeMeta">0 个收件人 · 0 字</span>
+          <button class="primary-button" type="submit">
+            <span data-icon="send"></span>
+            <span>发送</span>
+          </button>
+        </div>
+        <p class="form-error" id="composeError"></p>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
