@@ -11,6 +11,7 @@ HILINK_BASE=http://192.168.7.1
 HILINK_USERNAME=admin
 HILINK_PASSWORD=your-router-password
 PORT=8787
+SKIP_USB_MODESWITCH=0
 ```
 
 ```bash
@@ -19,6 +20,12 @@ npm start
 ```
 
 打开 `http://127.0.0.1:8787/`。页面不再提供应用内账号密码认证，设备登录由服务端使用 `.env` 自动完成；对外访问控制建议交给 Cloudflare Access。
+
+`npm start` 会先执行 `tools/switch_huawei_e8372.sh`，把 Huawei E8372 从安装盘模式切到 HiLink 网卡模式。这个脚本在设备已经是网卡模式或未插入时会自动跳过；如果需要临时跳过，可设置：
+
+```bash
+SKIP_USB_MODESWITCH=1 npm start
+```
 
 可选环境变量：
 

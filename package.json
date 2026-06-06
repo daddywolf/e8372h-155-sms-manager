@@ -4,6 +4,7 @@
   "private": true,
   "description": "Local Huawei HiLink SMS manager",
   "scripts": {
+    "prestart": "bash tools/switch_huawei_e8372.sh",
     "start": "node server.js"
   },
   "engines": {
